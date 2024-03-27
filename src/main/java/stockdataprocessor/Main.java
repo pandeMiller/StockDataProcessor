@@ -19,9 +19,10 @@ public class Main {
 
     }
     public static void main(String[] args) {
-        PipelineOptions options =PipelineOptionsFactory.fromArgs(args).withValidation().as(CustomPipelineOptions.class);
+        CustomPipelineOptions options =PipelineOptionsFactory.fromArgs(args).withValidation().as(CustomPipelineOptions.class);
         Pipeline pipeline = Pipeline.create(options);
-        CsvDataTo10DayMovingAvg csvDataTo10DayMovingAvg = new CsvDataTo10DayMovingAvg(pipeline);
+        PostGresIOConnector postGresIOConnector = new PostGresIOConnector(options);
+        CsvDataTo10DayMovingAvg csvDataTo10DayMovingAvg = new CsvDataTo10DayMovingAvg(pipeline,postGresIOConnector);
         csvDataTo10DayMovingAvg.getData();
         pipeline.run().waitUntilFinish();
     }

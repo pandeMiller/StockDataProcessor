@@ -2,11 +2,9 @@ package stockdataprocessor.transformations;
 
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
-import org.apache.beam.sdk.io.jdbc.JdbcIO;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.SlidingWindows;
@@ -18,9 +16,8 @@ import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import stockdataprocessor.Main.CustomPipelineOptions;
+import stockdataprocessor.PostGresIOConnector;
 
-import javax.sql.DataSource;
-import java.sql.Date;
 import java.util.List;
 
 public class CsvDataTo10DayMovingAvg {
@@ -28,37 +25,20 @@ public class CsvDataTo10DayMovingAvg {
     private static int windowSize = 10;
     private static int newWindowStartFreq = 1;
 
+    private PostGresIOConnector postGresIOConnector;
+
     private Pipeline pipeline;
-    public CsvDataTo10DayMovingAvg(Pipeline pipeline){
+    public CsvDataTo10DayMovingAvg(Pipeline pipeline, PostGresIOConnector postGresIOConnector){
         this.pipeline = pipeline;
+        this.postGresIOConnector = postGresIOConnector;
     }
 
-    public void getData(){
+    public PCollection<KV<Instant,Float>> getData(){
         CustomPipelineOptions customPipelineOptions = (CustomPipelineOptions)pipeline.getOptions();
-        String ticker = customPipelineOptions.getTicker();
         PCollection<Float> floatPCollection=  pipeline.apply(TextIO.read().from(customPipelineOptions.getPathToCsvFile()))
                 .apply(ParDo.of(new AddTimeStamps())).apply(Window.into(SlidingWindows.of(Duration.standardDays(windowSize)).every(Duration.standardDays(newWindowStartFreq))));
-        floatPCollection.apply(ParDo.of(new GroupByWindow())).apply(GroupByKey.create()).apply(ParDo.of(new MeanPerWindow())).apply(ParDo.of(new LogOutput<>("PCollection numbers after Mean transform: ")))
-                .apply(
-                JdbcIO.< KV<Instant,Float>>write().withDataSourceProviderFn(new PostgresDataSourceFn())
-
-        .withStatement("insert into ten_day_moving_avg_high(date,avg_high,ticker_symbol) values(?, ?, ?)").withPreparedStatementSetter((JdbcIO.PreparedStatementSetter<KV<Instant, Float>>) (element, query) -> {
-            query.setDate(1, new Date(element.getKey().getMillis()));
-            query.setFloat(2,element.getValue());
-            query.setString(3,ticker);
-        }));
-    }
-
-    private static class PostgresDataSourceFn implements SerializableFunction<Void, DataSource> {
-        private static transient DataSource dataSource;
-
-        @Override
-        public synchronized DataSource apply(Void input) {
-            if (dataSource == null) {
-                dataSource = JdbcIO.DataSourceConfiguration.create("org.postgresql.Driver", "jdbc:postgresql://localhost:5432/postgres?schema=PUBLIC").withUsername("postgres").withPassword("password").buildDatasource();
-            }
-            return dataSource;
-        }
+        PCollection<KV<Instant,Float>> input = floatPCollection.apply(ParDo.of(new GroupByWindow())).apply(GroupByKey.create()).apply(ParDo.of(new MeanPerWindow())).apply(ParDo.of(new LogOutput<>("PCollection numbers after Mean transform: ")));
+        return postGresIOConnector.persistRecords(input);
     }
 
     public static class LogOutput<T> extends DoFn<T, T> {
